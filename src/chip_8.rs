@@ -1,6 +1,8 @@
+use sdl2;
 use std::time;
 
 use crate::constants;
+use crate::display::Display;
 
 fn get_epoch_ns() -> u128 {
     time::SystemTime::now()
@@ -27,8 +29,9 @@ pub struct Chip8 {
     index_register: u16,
     program_counter: usize,
     stack_pointer: u8,
-    display: [bool; constants::DISPLAY_LEN],
+    display_buffer: [bool; constants::DISPLAY_LEN],
 
+    display: Display,
     debug: bool,
     instruction_time: u128,
     start_time: u128,
@@ -36,7 +39,14 @@ pub struct Chip8 {
 }
 
 impl Chip8 {
-    pub fn build(rom_file: &str, instruction_time: u128, debug: bool) -> Self {
+    pub fn build(
+        rom_file: &str,
+        instruction_time: u128,
+        scale: u32,
+        background_color: (u8, u8, u8),
+        foreground_color: (u8, u8, u8),
+        debug: bool,
+    ) -> Self {
         let bytes = std::fs::read(rom_file)
             .unwrap_or_else(|error| panic!("Failed to read file: {:?}", error));
 
@@ -46,6 +56,8 @@ impl Chip8 {
         ram[constants::PROGRAM_START..program_end].copy_from_slice(&bytes);
 
         let start_time = get_epoch_ns();
+        let sdl_context = sdl2::init().unwrap();
+        let display = Display::build(&sdl_context, scale, background_color, foreground_color);
 
         Chip8 {
             ram,
@@ -56,7 +68,8 @@ impl Chip8 {
             index_register: 0,
             program_counter: constants::PROGRAM_START,
             stack_pointer: 0,
-            display: [false; constants::DISPLAY_LEN],
+            display_buffer: [false; constants::DISPLAY_LEN],
+            display,
 
             debug,
             start_time,
@@ -125,7 +138,7 @@ impl Chip8 {
 
     // 0x00E0
     fn clear_screen(&mut self) {
-        self.display = [false; constants::DISPLAY_LEN];
+        self.display_buffer = [false; constants::DISPLAY_LEN];
         self.update_display = false;
     }
 

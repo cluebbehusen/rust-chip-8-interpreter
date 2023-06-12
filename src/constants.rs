@@ -27,3 +27,5 @@ pub const FONT: [u8; 80] = [
 ];
 pub const FONT_START: usize = 0x50;
 pub const FONT_END: usize = FONT_START + FONT.len();
+
+pub const WINDOW_TITLE: &str = "CHIP-8";
