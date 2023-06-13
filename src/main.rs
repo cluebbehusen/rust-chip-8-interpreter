@@ -8,6 +8,6 @@ fn main() {
     let foreground_color = (0, 0, 0);
     let background_color = (255, 255, 255);
 
-    let mut chip8 = Chip8::build("", 1000, 2, background_color, foreground_color, false);
-    chip8.cycle();
+    let mut chip8 = Chip8::build("", 1000, 10, background_color, foreground_color, true);
+    chip8.run();
 }

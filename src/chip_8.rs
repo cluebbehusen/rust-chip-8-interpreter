@@ -1,5 +1,5 @@
-use sdl2;
-use std::time;
+use sdl2::{self, event::Event, keyboard::Keycode};
+use std::time::{self, Duration};
 
 use crate::constants;
 use crate::display::Display;
@@ -32,6 +32,7 @@ pub struct Chip8 {
     display_buffer: [bool; constants::DISPLAY_LEN],
 
     display: Display,
+    sdl_context: sdl2::Sdl,
     debug: bool,
     instruction_time: u128,
     start_time: u128,
@@ -69,12 +70,39 @@ impl Chip8 {
             program_counter: constants::PROGRAM_START,
             stack_pointer: 0,
             display_buffer: [false; constants::DISPLAY_LEN],
-            display,
 
+            sdl_context,
+            display,
             debug,
             start_time,
             instruction_time,
             update_display: false,
+        }
+    }
+
+    pub fn run(&mut self) {
+        let mut event_pump = self.sdl_context.event_pump().unwrap();
+
+        'running: loop {
+            for event in event_pump.poll_iter() {
+                match event {
+                    Event::Quit { .. }
+                    | Event::KeyDown {
+                        keycode: Some(Keycode::Escape),
+                        ..
+                    } => break 'running,
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Return),
+                        ..
+                    } => self.cycle(),
+                    _ => {}
+                }
+            }
+
+            self.display.canvas.clear();
+            self.display.canvas.present();
+            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
+            // The rest of the game loop goes here...
         }
     }
 
@@ -97,7 +125,8 @@ impl Chip8 {
         }
     }
 
-    pub fn cycle(&mut self) {
+    fn cycle(&mut self) {
+        println!("Cycling!");
         let instruction = self.fetch_instruction();
         let parsed_instruction = Chip8::parse_instruction(instruction);
 
@@ -133,6 +162,11 @@ impl Chip8 {
                 parsed_instruction.n,
             ),
             _ => panic!("Unrecognized opcode: {:X}", parsed_instruction.opcode),
+        }
+
+        if self.update_display {
+            self.display.render_buffer(self.display_buffer);
+            self.update_display = false;
         }
     }
 
@@ -173,6 +207,32 @@ impl Chip8 {
 
     // 0xDXYN
     fn display(&mut self, x_register: u8, y_register: u8, height: u8) {
-        todo!("Implement display")
+        let mut x_coordinate = self.registers[x_register as usize] % constants::DISPLAY_WIDTH as u8;
+        let mut y_coordinate =
+            self.registers[y_register as usize] % constants::DISPLAY_HEIGHT as u8;
+        self.registers[0x0F] = 0;
+
+        for row in 0..height {
+            let sprite_data = self.ram[(self.index_register + row as u16) as usize];
+            for column in 0..8 {
+                let sprite_pixel = (sprite_data >> (7 - column)) & 0x01;
+                let current_coordinate = (x_coordinate + column) as usize
+                    + (y_coordinate + row) as usize * constants::DISPLAY_WIDTH;
+                if self.display_buffer[current_coordinate] {
+                    self.registers[0x0F] = 1;
+                }
+                if sprite_pixel == 1 {
+                    self.display_buffer[current_coordinate] ^= true;
+                }
+                x_coordinate += 1;
+                if x_coordinate >= constants::DISPLAY_WIDTH as u8 {
+                    break;
+                }
+            }
+            y_coordinate += 1;
+            if y_coordinate >= constants::DISPLAY_HEIGHT as u8 {
+                break;
+            }
+        }
     }
 }
