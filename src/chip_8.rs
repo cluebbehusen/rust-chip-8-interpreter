@@ -1,5 +1,5 @@
 use sdl2::{self, event::Event, keyboard::Keycode};
-use std::time::{self, Duration};
+use std::time;
 
 use crate::constants;
 use crate::display::Display;
@@ -35,7 +35,7 @@ pub struct Chip8 {
     sdl_context: sdl2::Sdl,
     debug: bool,
     instruction_time: u128,
-    start_time: u128,
+    last_instruction_time: u128,
     update_display: bool,
 }
 
@@ -56,7 +56,7 @@ impl Chip8 {
         let program_end = constants::PROGRAM_START + bytes.len();
         ram[constants::PROGRAM_START..program_end].copy_from_slice(&bytes);
 
-        let start_time = get_epoch_ns();
+        let last_instruction_time = get_epoch_ns();
         let sdl_context = sdl2::init().unwrap();
         let display = Display::build(&sdl_context, scale, background_color, foreground_color);
 
@@ -74,7 +74,7 @@ impl Chip8 {
             sdl_context,
             display,
             debug,
-            start_time,
+            last_instruction_time,
             instruction_time,
             update_display: false,
         }
@@ -94,15 +94,21 @@ impl Chip8 {
                     Event::KeyDown {
                         keycode: Some(Keycode::Return),
                         ..
-                    } => self.cycle(),
+                    } => {
+                        if self.debug {
+                            self.cycle();
+                        }
+                    }
                     _ => {}
                 }
             }
 
-            self.display.canvas.clear();
-            self.display.canvas.present();
-            ::std::thread::sleep(Duration::new(0, 1_000_000_000u32 / 30));
-            // The rest of the game loop goes here...
+            let valid_cycle_time =
+                get_epoch_ns() - self.last_instruction_time >= self.instruction_time;
+            if valid_cycle_time && !self.debug {
+                self.cycle();
+                self.last_instruction_time = get_epoch_ns();
+            }
         }
     }
 
@@ -126,7 +132,6 @@ impl Chip8 {
     }
 
     fn cycle(&mut self) {
-        println!("Cycling!");
         let instruction = self.fetch_instruction();
         let parsed_instruction = Chip8::parse_instruction(instruction);
 
@@ -141,6 +146,10 @@ impl Chip8 {
                 parsed_instruction.nn,
                 parsed_instruction.nnn,
             );
+            for i in 0..constants::REGISTER_COUNT {
+                print!("V{:X}: {:X} | ", i, self.registers[i]);
+            }
+            println!("I: {:X}", self.index_register);
         }
 
         match parsed_instruction.opcode {
@@ -173,7 +182,7 @@ impl Chip8 {
     // 0x00E0
     fn clear_screen(&mut self) {
         self.display_buffer = [false; constants::DISPLAY_LEN];
-        self.update_display = false;
+        self.update_display = true;
     }
 
     // 0x00EE
@@ -207,9 +216,8 @@ impl Chip8 {
 
     // 0xDXYN
     fn display(&mut self, x_register: u8, y_register: u8, height: u8) {
-        let mut x_coordinate = self.registers[x_register as usize] % constants::DISPLAY_WIDTH as u8;
-        let mut y_coordinate =
-            self.registers[y_register as usize] % constants::DISPLAY_HEIGHT as u8;
+        let x_coordinate = self.registers[x_register as usize] % constants::DISPLAY_WIDTH as u8;
+        let y_coordinate = self.registers[y_register as usize] % constants::DISPLAY_HEIGHT as u8;
         self.registers[0x0F] = 0;
 
         for row in 0..height {
@@ -224,15 +232,15 @@ impl Chip8 {
                 if sprite_pixel == 1 {
                     self.display_buffer[current_coordinate] ^= true;
                 }
-                x_coordinate += 1;
-                if x_coordinate >= constants::DISPLAY_WIDTH as u8 {
+                if x_coordinate + column + 1 >= constants::DISPLAY_WIDTH as u8 {
                     break;
                 }
             }
-            y_coordinate += 1;
-            if y_coordinate >= constants::DISPLAY_HEIGHT as u8 {
+            if y_coordinate + row + 1 >= constants::DISPLAY_HEIGHT as u8 {
                 break;
             }
         }
+
+        self.update_display = true;
     }
 }

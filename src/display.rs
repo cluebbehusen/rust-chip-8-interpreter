@@ -3,7 +3,7 @@ use sdl2::{pixels::Color, render::Canvas, video::Window, Sdl};
 use crate::constants;
 
 pub struct Display {
-    pub canvas: Canvas<Window>,
+    canvas: Canvas<Window>,
     scale: u32,
     background_color: Color,
     foreground_color: Color,
