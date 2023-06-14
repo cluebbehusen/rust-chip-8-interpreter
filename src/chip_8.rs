@@ -162,8 +162,28 @@ impl Chip8 {
                 ),
             },
             0x10 => self.jump(parsed_instruction.nnn),
+            0x20 => self.call_subroutine(parsed_instruction.nnn),
+            0x30 => self.skip_if_equal(parsed_instruction.x, parsed_instruction.nn),
+            0x40 => self.skip_if_not_equal(parsed_instruction.x, parsed_instruction.nn),
+            0x50 => self.skip_if_registers_equal(parsed_instruction.x, parsed_instruction.y),
             0x60 => self.set_register(parsed_instruction.x, parsed_instruction.nn),
             0x70 => self.add_to_register(parsed_instruction.x, parsed_instruction.nn),
+            0x80 => match parsed_instruction.n {
+                0x00 => todo!("set"),
+                0x01 => todo!("or"),
+                0x02 => todo!("and"),
+                0x03 => todo!("xor"),
+                0x04 => todo!("add"),
+                0x05 => todo!("sub"),
+                0x06 => todo!("shift"),
+                0x07 => todo!("sub"),
+                0x0E => todo!("shift"),
+                _ => panic!(
+                    "Unrecognized fourth nibble: {:X} for opcode: {:X}",
+                    parsed_instruction.n, parsed_instruction.opcode
+                ),
+            },
+            0x90 => self.skip_if_registers_not_equal(parsed_instruction.x, parsed_instruction.y),
             0xA0 => self.set_index_register(parsed_instruction.nnn),
             0xD0 => self.display(
                 parsed_instruction.x,
@@ -199,6 +219,34 @@ impl Chip8 {
         self.program_counter = address as usize;
     }
 
+    // 0x2NNN
+    fn call_subroutine(&mut self, address: u16) {
+        self.stack_pointer += 1;
+        self.stack[self.stack_pointer as usize] = self.program_counter as u16;
+        self.program_counter = address as usize;
+    }
+
+    // 0x3XNN
+    fn skip_if_equal(&mut self, register: u8, value: u8) {
+        if self.registers[register as usize] == value {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0x4XNN
+    fn skip_if_not_equal(&mut self, register: u8, value: u8) {
+        if self.registers[register as usize] != value {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0x5XY0
+    fn skip_if_registers_equal(&mut self, x_register: u8, y_register: u8) {
+        if self.registers[x_register as usize] == self.registers[y_register as usize] {
+            self.program_counter += 2;
+        }
+    }
+
     // 0x6XNN
     fn set_register(&mut self, register: u8, value: u8) {
         self.registers[register as usize] = value;
@@ -207,6 +255,13 @@ impl Chip8 {
     // 0x7NN
     fn add_to_register(&mut self, register: u8, value: u8) {
         self.registers[register as usize] = self.registers[register as usize].wrapping_add(value);
+    }
+
+    // 9XY0
+    fn skip_if_registers_not_equal(&mut self, x_register: u8, y_register: u8) {
+        if self.registers[x_register as usize] != self.registers[y_register as usize] {
+            self.program_counter += 2;
+        }
     }
 
     // 0xANNN
@@ -221,23 +276,28 @@ impl Chip8 {
         self.registers[0x0F] = 0;
 
         for row in 0..height {
+            let current_y_coordinate = (y_coordinate + row) as usize;
+            if current_y_coordinate >= constants::DISPLAY_HEIGHT {
+                break;
+            }
+
             let sprite_data = self.ram[(self.index_register + row as u16) as usize];
             for column in 0..8 {
-                let sprite_pixel = (sprite_data >> (7 - column)) & 0x01;
-                let current_coordinate = (x_coordinate + column) as usize
-                    + (y_coordinate + row) as usize * constants::DISPLAY_WIDTH;
+                let current_x_coordinate = (x_coordinate + column) as usize;
+                if current_x_coordinate >= constants::DISPLAY_WIDTH {
+                    break;
+                }
+
+                let current_coordinate =
+                    current_x_coordinate + current_y_coordinate * constants::DISPLAY_WIDTH;
                 if self.display_buffer[current_coordinate] {
                     self.registers[0x0F] = 1;
                 }
+
+                let sprite_pixel = (sprite_data >> (7 - column)) & 0x01;
                 if sprite_pixel == 1 {
                     self.display_buffer[current_coordinate] ^= true;
                 }
-                if x_coordinate + column + 1 >= constants::DISPLAY_WIDTH as u8 {
-                    break;
-                }
-            }
-            if y_coordinate + row + 1 >= constants::DISPLAY_HEIGHT as u8 {
-                break;
             }
         }
 
