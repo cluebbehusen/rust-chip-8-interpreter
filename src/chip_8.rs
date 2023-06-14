@@ -20,6 +20,19 @@ struct ParsedInstruction {
     nnn: u16,
 }
 
+impl ParsedInstruction {
+    pub fn build(instruction: u16) -> ParsedInstruction {
+        ParsedInstruction {
+            opcode: ((instruction & 0xF000) >> 8) as u8,
+            x: ((instruction & 0x0F00) >> 8) as u8,
+            y: ((instruction & 0x00F0) >> 4) as u8,
+            n: (instruction & 0x000F) as u8,
+            nn: (instruction & 0x00FF) as u8,
+            nnn: instruction & 0x0FFF,
+        }
+    }
+}
+
 pub struct Chip8 {
     ram: [u8; constants::RAM_LEN],
     registers: [u8; constants::REGISTER_COUNT],
@@ -120,20 +133,9 @@ impl Chip8 {
         ((instruction_first_byte as u16) << 8) | instruction_second_byte as u16
     }
 
-    fn parse_instruction(instruction: u16) -> ParsedInstruction {
-        ParsedInstruction {
-            opcode: ((instruction & 0xF000) >> 8) as u8,
-            x: ((instruction & 0x0F00) >> 8) as u8,
-            y: ((instruction & 0x00F0) >> 4) as u8,
-            n: (instruction & 0x000F) as u8,
-            nn: (instruction & 0x00FF) as u8,
-            nnn: instruction & 0x0FFF,
-        }
-    }
-
     fn cycle(&mut self) {
         let instruction = self.fetch_instruction();
-        let parsed_instruction = Chip8::parse_instruction(instruction);
+        let parsed_instruction = ParsedInstruction::build(instruction);
 
         if self.debug {
             println!(
