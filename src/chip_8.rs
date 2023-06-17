@@ -1,5 +1,6 @@
 use rand;
-use sdl2::{self, event::Event, keyboard::Keycode};
+use sdl2::{self, event::Event, keyboard::Keycode, keyboard::Scancode};
+use std::collections::HashSet;
 use std::time;
 
 use crate::constants;
@@ -10,6 +11,28 @@ fn get_epoch_ns() -> u128 {
         .duration_since(time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+fn map_scancode_to_value(scancode: Scancode) -> Option<u8> {
+    match scancode {
+        Scancode::X => Some(0x00),
+        Scancode::Num1 => Some(0x01),
+        Scancode::Num2 => Some(0x02),
+        Scancode::Num3 => Some(0x03),
+        Scancode::Q => Some(0x04),
+        Scancode::W => Some(0x05),
+        Scancode::E => Some(0x06),
+        Scancode::A => Some(0x07),
+        Scancode::S => Some(0x08),
+        Scancode::D => Some(0x09),
+        Scancode::Z => Some(0x0A),
+        Scancode::C => Some(0x0B),
+        Scancode::Num4 => Some(0x0C),
+        Scancode::R => Some(0x0D),
+        Scancode::F => Some(0x0E),
+        Scancode::V => Some(0x0F),
+        _ => None,
+    }
 }
 
 struct ParsedInstruction {
@@ -115,6 +138,12 @@ impl Chip8 {
             }
             self.last_decrement_timer_time = current_epoch_ns;
 
+            let pressed_keys: HashSet<u8> = event_pump
+                .keyboard_state()
+                .pressed_scancodes()
+                .filter_map(map_scancode_to_value)
+                .collect();
+
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
@@ -127,7 +156,7 @@ impl Chip8 {
                         ..
                     } => {
                         if self.debug {
-                            self.cycle();
+                            self.cycle(&pressed_keys);
                         }
                     }
                     _ => {}
@@ -137,7 +166,7 @@ impl Chip8 {
             let valid_cycle_time =
                 current_epoch_ns - self.last_instruction_time >= self.instruction_time;
             if valid_cycle_time && !self.debug {
-                self.cycle();
+                self.cycle(&pressed_keys);
                 self.last_instruction_time = get_epoch_ns();
             }
         }
@@ -151,7 +180,7 @@ impl Chip8 {
         ((instruction_first_byte as u16) << 8) | instruction_second_byte as u16
     }
 
-    fn cycle(&mut self) {
+    fn cycle(&mut self, pressed_keys: &HashSet<u8>) {
         let instruction = self.fetch_instruction();
         let parsed_instruction = ParsedInstruction::build(instruction);
 
@@ -223,6 +252,25 @@ impl Chip8 {
                 parsed_instruction.y,
                 parsed_instruction.n,
             ),
+            0xE0 => match parsed_instruction.nn {
+                0x9E => self.skip_if_key_pressed(parsed_instruction.x, pressed_keys),
+                0xA1 => self.skip_if_key_not_pressed(parsed_instruction.x, pressed_keys),
+                _ => panic!(
+                    "Unrecognized second byte: {:X} for opcode: {:X}",
+                    parsed_instruction.nn, parsed_instruction.opcode
+                ),
+            },
+            0xF0 => match parsed_instruction.nn {
+                0x07 => self.set_register_to_delay_timer(parsed_instruction.x),
+                0x0A => self.set_register_to_key_with_wait(parsed_instruction.x, pressed_keys),
+                0x15 => self.set_delay_timer_to_register(parsed_instruction.x),
+                0x18 => self.set_sound_timer_to_register(parsed_instruction.x),
+                0x1E => self.add_register_to_index_register(parsed_instruction.x),
+                _ => panic!(
+                    "Unrecognized second byte: {:X} for opcode: {:X}",
+                    parsed_instruction.nn, parsed_instruction.opcode
+                ),
+            },
             _ => panic!("Unrecognized opcode: {:X}", parsed_instruction.opcode),
         }
 
@@ -405,5 +453,51 @@ impl Chip8 {
         }
 
         self.update_display = true;
+    }
+
+    // 0xEX9E
+    fn skip_if_key_pressed(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        let key = self.registers[register as usize];
+        if pressed_keys.contains(&key) {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0xEXA1
+    fn skip_if_key_not_pressed(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        let key = self.registers[register as usize];
+        if !pressed_keys.contains(&key) {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0xFX07
+    fn set_register_to_delay_timer(&mut self, register: u8) {
+        self.registers[register as usize] = self.delay_timer;
+    }
+
+    // 0xFX0A
+    fn set_register_to_key_with_wait(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        if pressed_keys.is_empty() {
+            self.program_counter -= 2;
+        } else {
+            let key = pressed_keys.iter().next().unwrap();
+            self.registers[register as usize] = *key;
+        }
+    }
+
+    // 0xFX15
+    fn set_delay_timer_to_register(&mut self, register: u8) {
+        self.delay_timer = self.registers[register as usize];
+    }
+
+    // 0xFX18
+    fn set_sound_timer_to_register(&mut self, register: u8) {
+        self.sound_timer = self.registers[register as usize];
+    }
+
+    // 0xFX1E
+    fn add_register_to_index_register(&mut self, register: u8) {
+        self.index_register += self.registers[register as usize] as u16;
     }
 }
