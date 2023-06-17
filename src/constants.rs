@@ -7,6 +7,8 @@ pub const DISPLAY_WIDTH: usize = 64;
 pub const DISPLAY_HEIGHT: usize = 32;
 pub const DISPLAY_LEN: usize = DISPLAY_WIDTH * DISPLAY_HEIGHT;
 
+pub const TIMER_DECREMENT_TIME: u128 = 1_000_000_000 / 60;
+
 pub const FONT: [u8; 80] = [
     0xF0, 0x90, 0x90, 0x90, 0xF0, // 0
     0x20, 0x60, 0x20, 0x20, 0x70, // 1
