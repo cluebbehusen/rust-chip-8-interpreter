@@ -1,4 +1,6 @@
-use sdl2::{self, event::Event, keyboard::Keycode};
+use rand;
+use sdl2::{self, event::Event, keyboard::Keycode, keyboard::Scancode};
+use std::collections::HashSet;
 use std::time;
 
 use crate::constants;
@@ -11,6 +13,28 @@ fn get_epoch_ns() -> u128 {
         .as_nanos()
 }
 
+fn map_scancode_to_value(scancode: Scancode) -> Option<u8> {
+    match scancode {
+        Scancode::X => Some(0x00),
+        Scancode::Num1 => Some(0x01),
+        Scancode::Num2 => Some(0x02),
+        Scancode::Num3 => Some(0x03),
+        Scancode::Q => Some(0x04),
+        Scancode::W => Some(0x05),
+        Scancode::E => Some(0x06),
+        Scancode::A => Some(0x07),
+        Scancode::S => Some(0x08),
+        Scancode::D => Some(0x09),
+        Scancode::Z => Some(0x0A),
+        Scancode::C => Some(0x0B),
+        Scancode::Num4 => Some(0x0C),
+        Scancode::R => Some(0x0D),
+        Scancode::F => Some(0x0E),
+        Scancode::V => Some(0x0F),
+        _ => None,
+    }
+}
+
 struct ParsedInstruction {
     opcode: u8,
     x: u8,
@@ -18,6 +42,19 @@ struct ParsedInstruction {
     n: u8,
     nn: u8,
     nnn: u16,
+}
+
+impl ParsedInstruction {
+    pub fn build(instruction: u16) -> ParsedInstruction {
+        ParsedInstruction {
+            opcode: ((instruction & 0xF000) >> 8) as u8,
+            x: ((instruction & 0x0F00) >> 8) as u8,
+            y: ((instruction & 0x00F0) >> 4) as u8,
+            n: (instruction & 0x000F) as u8,
+            nn: (instruction & 0x00FF) as u8,
+            nnn: instruction & 0x0FFF,
+        }
+    }
 }
 
 pub struct Chip8 {
@@ -36,6 +73,7 @@ pub struct Chip8 {
     debug: bool,
     instruction_time: u128,
     last_instruction_time: u128,
+    last_decrement_timer_time: u128,
     update_display: bool,
 }
 
@@ -56,7 +94,9 @@ impl Chip8 {
         let program_end = constants::PROGRAM_START + bytes.len();
         ram[constants::PROGRAM_START..program_end].copy_from_slice(&bytes);
 
-        let last_instruction_time = get_epoch_ns();
+        let current_epoch_ns = get_epoch_ns();
+        let last_instruction_time = current_epoch_ns;
+        let last_decrement_timer_time = current_epoch_ns;
         let sdl_context = sdl2::init().unwrap();
         let display = Display::build(&sdl_context, scale, background_color, foreground_color);
 
@@ -75,6 +115,7 @@ impl Chip8 {
             display,
             debug,
             last_instruction_time,
+            last_decrement_timer_time,
             instruction_time,
             update_display: false,
         }
@@ -84,6 +125,25 @@ impl Chip8 {
         let mut event_pump = self.sdl_context.event_pump().unwrap();
 
         'running: loop {
+            let current_epoch_ns = get_epoch_ns();
+            let valid_decrement_timer_time = current_epoch_ns - self.last_decrement_timer_time
+                >= constants::TIMER_DECREMENT_TIME;
+            if valid_decrement_timer_time {
+                if self.delay_timer > 0 {
+                    self.delay_timer -= 1;
+                }
+                if self.sound_timer > 0 {
+                    self.sound_timer -= 1;
+                }
+            }
+            self.last_decrement_timer_time = current_epoch_ns;
+
+            let pressed_keys: HashSet<u8> = event_pump
+                .keyboard_state()
+                .pressed_scancodes()
+                .filter_map(map_scancode_to_value)
+                .collect();
+
             for event in event_pump.poll_iter() {
                 match event {
                     Event::Quit { .. }
@@ -96,7 +156,7 @@ impl Chip8 {
                         ..
                     } => {
                         if self.debug {
-                            self.cycle();
+                            self.cycle(&pressed_keys);
                         }
                     }
                     _ => {}
@@ -104,9 +164,9 @@ impl Chip8 {
             }
 
             let valid_cycle_time =
-                get_epoch_ns() - self.last_instruction_time >= self.instruction_time;
+                current_epoch_ns - self.last_instruction_time >= self.instruction_time;
             if valid_cycle_time && !self.debug {
-                self.cycle();
+                self.cycle(&pressed_keys);
                 self.last_instruction_time = get_epoch_ns();
             }
         }
@@ -120,20 +180,9 @@ impl Chip8 {
         ((instruction_first_byte as u16) << 8) | instruction_second_byte as u16
     }
 
-    fn parse_instruction(instruction: u16) -> ParsedInstruction {
-        ParsedInstruction {
-            opcode: ((instruction & 0xF000) >> 8) as u8,
-            x: ((instruction & 0x0F00) >> 8) as u8,
-            y: ((instruction & 0x00F0) >> 4) as u8,
-            n: (instruction & 0x000F) as u8,
-            nn: (instruction & 0x00FF) as u8,
-            nnn: instruction & 0x0FFF,
-        }
-    }
-
-    fn cycle(&mut self) {
+    fn cycle(&mut self, pressed_keys: &HashSet<u8>) {
         let instruction = self.fetch_instruction();
-        let parsed_instruction = Chip8::parse_instruction(instruction);
+        let parsed_instruction = ParsedInstruction::build(instruction);
 
         if self.debug {
             println!(
@@ -161,15 +210,71 @@ impl Chip8 {
                     parsed_instruction.nn, parsed_instruction.opcode
                 ),
             },
-            0x10 => self.jump(parsed_instruction.nnn),
-            0x60 => self.set_register(parsed_instruction.x, parsed_instruction.nn),
-            0x70 => self.add_to_register(parsed_instruction.x, parsed_instruction.nn),
-            0xA0 => self.set_index_register(parsed_instruction.nnn),
+            0x10 => self.jump_to_address(parsed_instruction.nnn),
+            0x20 => self.call_subroutine_at_address(parsed_instruction.nnn),
+            0x30 => self.skip_if_equal_to_value(parsed_instruction.x, parsed_instruction.nn),
+            0x40 => self.skip_if_not_equal_to_value(parsed_instruction.x, parsed_instruction.nn),
+            0x50 => self.skip_if_equal_to_register(parsed_instruction.x, parsed_instruction.y),
+            0x60 => self.set_register_to_value(parsed_instruction.x, parsed_instruction.nn),
+            0x70 => self.add_value_to_register(parsed_instruction.x, parsed_instruction.nn),
+            0x80 => match parsed_instruction.n {
+                0x00 => self.set_register_to_register(parsed_instruction.x, parsed_instruction.y),
+                0x01 => self.or_register_with_register(parsed_instruction.x, parsed_instruction.y),
+                0x02 => self.and_register_with_register(parsed_instruction.x, parsed_instruction.y),
+                0x03 => self.xor_register_with_register(parsed_instruction.x, parsed_instruction.y),
+                0x04 => self.add_register_to_register(parsed_instruction.x, parsed_instruction.y),
+                0x05 => {
+                    self.subtract_register_from_register(parsed_instruction.x, parsed_instruction.y)
+                }
+                0x06 => self.set_register_to_right_shifted_register(
+                    parsed_instruction.x,
+                    parsed_instruction.y,
+                ),
+                0x07 => self.subtract_register_from_register_flipped(
+                    parsed_instruction.x,
+                    parsed_instruction.y,
+                ),
+                0x0E => self.set_register_to_left_shifted_register(
+                    parsed_instruction.x,
+                    parsed_instruction.y,
+                ),
+                _ => panic!(
+                    "Unrecognized fourth nibble: {:X} for opcode: {:X}",
+                    parsed_instruction.n, parsed_instruction.opcode
+                ),
+            },
+            0x90 => self.skip_if_not_equal_to_register(parsed_instruction.x, parsed_instruction.y),
+            0xA0 => self.set_index_register_to_value(parsed_instruction.nnn),
+            0xB0 => self.jump_to_address_with_offset(parsed_instruction.nnn),
+            0xC0 => self.set_register_to_random(parsed_instruction.x, parsed_instruction.nn),
             0xD0 => self.display(
                 parsed_instruction.x,
                 parsed_instruction.y,
                 parsed_instruction.n,
             ),
+            0xE0 => match parsed_instruction.nn {
+                0x9E => self.skip_if_key_pressed(parsed_instruction.x, pressed_keys),
+                0xA1 => self.skip_if_key_not_pressed(parsed_instruction.x, pressed_keys),
+                _ => panic!(
+                    "Unrecognized second byte: {:X} for opcode: {:X}",
+                    parsed_instruction.nn, parsed_instruction.opcode
+                ),
+            },
+            0xF0 => match parsed_instruction.nn {
+                0x07 => self.set_register_to_delay_timer(parsed_instruction.x),
+                0x0A => self.set_register_to_key_with_wait(parsed_instruction.x, pressed_keys),
+                0x15 => self.set_delay_timer_to_register(parsed_instruction.x),
+                0x18 => self.set_sound_timer_to_register(parsed_instruction.x),
+                0x1E => self.add_register_to_index_register(parsed_instruction.x),
+                0x29 => self.set_index_register_to_font_sprite(parsed_instruction.x),
+                0x33 => self.set_index_register_to_bcd(parsed_instruction.x),
+                0x55 => self.store_registers_in_memory(parsed_instruction.x),
+                0x65 => self.load_registers_from_memory(parsed_instruction.x),
+                _ => panic!(
+                    "Unrecognized second byte: {:X} for opcode: {:X}",
+                    parsed_instruction.nn, parsed_instruction.opcode
+                ),
+            },
             _ => panic!("Unrecognized opcode: {:X}", parsed_instruction.opcode),
         }
 
@@ -195,23 +300,128 @@ impl Chip8 {
     }
 
     // 0x1NNN
-    fn jump(&mut self, address: u16) {
+    fn jump_to_address(&mut self, address: u16) {
         self.program_counter = address as usize;
     }
 
+    // 0x2NNN
+    fn call_subroutine_at_address(&mut self, address: u16) {
+        self.stack_pointer += 1;
+        self.stack[self.stack_pointer as usize] = self.program_counter as u16;
+        self.program_counter = address as usize;
+    }
+
+    // 0x3XNN
+    fn skip_if_equal_to_value(&mut self, register: u8, value: u8) {
+        if self.registers[register as usize] == value {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0x4XNN
+    fn skip_if_not_equal_to_value(&mut self, register: u8, value: u8) {
+        if self.registers[register as usize] != value {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0x5XY0
+    fn skip_if_equal_to_register(&mut self, x_register: u8, y_register: u8) {
+        if self.registers[x_register as usize] == self.registers[y_register as usize] {
+            self.program_counter += 2;
+        }
+    }
+
     // 0x6XNN
-    fn set_register(&mut self, register: u8, value: u8) {
+    fn set_register_to_value(&mut self, register: u8, value: u8) {
         self.registers[register as usize] = value;
     }
 
-    // 0x7NN
-    fn add_to_register(&mut self, register: u8, value: u8) {
+    // 0x7XNN
+    fn add_value_to_register(&mut self, register: u8, value: u8) {
         self.registers[register as usize] = self.registers[register as usize].wrapping_add(value);
     }
 
+    // 0x8XY0
+    fn set_register_to_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] = self.registers[y_register as usize];
+    }
+
+    // 0x8XY1
+    fn or_register_with_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] |= self.registers[y_register as usize];
+    }
+
+    // 0x8XY2
+    fn and_register_with_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] &= self.registers[y_register as usize];
+    }
+
+    // 0x8XY3
+    fn xor_register_with_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] ^= self.registers[y_register as usize];
+    }
+
+    // 0x8XY4
+    fn add_register_to_register(&mut self, x_register: u8, y_register: u8) {
+        let (result, overflow) = self.registers[x_register as usize]
+            .overflowing_add(self.registers[y_register as usize]);
+        self.registers[x_register as usize] = result;
+        self.registers[0x0F] = overflow as u8;
+    }
+
+    // 0x8XY5
+    fn subtract_register_from_register(&mut self, x_register: u8, y_register: u8) {
+        let (result, overflow) = self.registers[x_register as usize]
+            .overflowing_sub(self.registers[y_register as usize]);
+        self.registers[x_register as usize] = result;
+        self.registers[0x0F] = !overflow as u8;
+    }
+
+    // 0x8XY6
+    fn set_register_to_right_shifted_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] = self.registers[y_register as usize];
+        self.registers[0x0F] = self.registers[x_register as usize] & 0x01;
+        self.registers[x_register as usize] >>= 1;
+    }
+
+    // 0x8XY7
+    fn subtract_register_from_register_flipped(&mut self, x_register: u8, y_register: u8) {
+        let (result, overflow) = self.registers[y_register as usize]
+            .overflowing_sub(self.registers[x_register as usize]);
+        self.registers[x_register as usize] = result;
+        self.registers[0x0F] = !overflow as u8;
+    }
+
+    // 0x8XYE
+    fn set_register_to_left_shifted_register(&mut self, x_register: u8, y_register: u8) {
+        self.registers[x_register as usize] = self.registers[y_register as usize];
+        self.registers[0x0F] = (self.registers[x_register as usize] & 0x80) >> 7;
+        self.registers[x_register as usize] <<= 1;
+    }
+
+    // 9XY0
+    fn skip_if_not_equal_to_register(&mut self, x_register: u8, y_register: u8) {
+        if self.registers[x_register as usize] != self.registers[y_register as usize] {
+            self.program_counter += 2;
+        }
+    }
+
     // 0xANNN
-    fn set_index_register(&mut self, value: u16) {
+    fn set_index_register_to_value(&mut self, value: u16) {
         self.index_register = value;
+    }
+
+    // 0xBNNN
+    fn jump_to_address_with_offset(&mut self, address: u16) {
+        let offset = self.registers[0] as u16;
+        self.program_counter = (address + offset) as usize;
+    }
+
+    // 0xCXNN
+    fn set_register_to_random(&mut self, register: u8, value: u8) {
+        let random_value = rand::random::<u8>();
+        self.registers[register as usize] = random_value & value;
     }
 
     // 0xDXYN
@@ -221,26 +431,109 @@ impl Chip8 {
         self.registers[0x0F] = 0;
 
         for row in 0..height {
+            let current_y_coordinate = (y_coordinate + row) as usize;
+            if current_y_coordinate >= constants::DISPLAY_HEIGHT {
+                break;
+            }
+
             let sprite_data = self.ram[(self.index_register + row as u16) as usize];
             for column in 0..8 {
-                let sprite_pixel = (sprite_data >> (7 - column)) & 0x01;
-                let current_coordinate = (x_coordinate + column) as usize
-                    + (y_coordinate + row) as usize * constants::DISPLAY_WIDTH;
+                let current_x_coordinate = (x_coordinate + column) as usize;
+                if current_x_coordinate >= constants::DISPLAY_WIDTH {
+                    break;
+                }
+
+                let current_coordinate =
+                    current_x_coordinate + current_y_coordinate * constants::DISPLAY_WIDTH;
                 if self.display_buffer[current_coordinate] {
                     self.registers[0x0F] = 1;
                 }
+
+                let sprite_pixel = (sprite_data >> (7 - column)) & 0x01;
                 if sprite_pixel == 1 {
                     self.display_buffer[current_coordinate] ^= true;
                 }
-                if x_coordinate + column + 1 >= constants::DISPLAY_WIDTH as u8 {
-                    break;
-                }
-            }
-            if y_coordinate + row + 1 >= constants::DISPLAY_HEIGHT as u8 {
-                break;
             }
         }
 
         self.update_display = true;
+    }
+
+    // 0xEX9E
+    fn skip_if_key_pressed(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        let key = self.registers[register as usize];
+        if pressed_keys.contains(&key) {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0xEXA1
+    fn skip_if_key_not_pressed(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        let key = self.registers[register as usize];
+        if !pressed_keys.contains(&key) {
+            self.program_counter += 2;
+        }
+    }
+
+    // 0xFX07
+    fn set_register_to_delay_timer(&mut self, register: u8) {
+        self.registers[register as usize] = self.delay_timer;
+    }
+
+    // 0xFX0A
+    fn set_register_to_key_with_wait(&mut self, register: u8, pressed_keys: &HashSet<u8>) {
+        if pressed_keys.is_empty() {
+            self.program_counter -= 2;
+        } else {
+            let key = pressed_keys.iter().next().unwrap();
+            self.registers[register as usize] = *key;
+        }
+    }
+
+    // 0xFX15
+    fn set_delay_timer_to_register(&mut self, register: u8) {
+        self.delay_timer = self.registers[register as usize];
+    }
+
+    // 0xFX18
+    fn set_sound_timer_to_register(&mut self, register: u8) {
+        self.sound_timer = self.registers[register as usize];
+    }
+
+    // 0xFX1E
+    fn add_register_to_index_register(&mut self, register: u8) {
+        self.index_register += self.registers[register as usize] as u16;
+    }
+
+    // 0xFX29
+    fn set_index_register_to_font_sprite(&mut self, register: u8) {
+        let font_sprite = self.registers[register as usize] * 5;
+        self.index_register = font_sprite as u16 + constants::FONT_START as u16;
+    }
+
+    // 0xFX33
+    fn set_index_register_to_bcd(&mut self, register: u8) {
+        let value = self.registers[register as usize];
+        let hundreds = value / 100;
+        let tens = (value / 10) % 10;
+        let ones = value % 10;
+
+        self.ram[self.index_register as usize] = hundreds;
+        self.ram[self.index_register as usize + 1] = tens;
+        self.ram[self.index_register as usize + 2] = ones;
+    }
+
+    // 0xFX55
+    fn store_registers_in_memory(&mut self, x: u8) {
+        for i in 0..=x {
+            self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
+        }
+    }
+
+    // 0xFX65
+    fn load_registers_from_memory(&mut self, x: u8) {
+        for i in 0..=x {
+            self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
+        }
     }
 }
