@@ -266,6 +266,10 @@ impl Chip8 {
                 0x15 => self.set_delay_timer_to_register(parsed_instruction.x),
                 0x18 => self.set_sound_timer_to_register(parsed_instruction.x),
                 0x1E => self.add_register_to_index_register(parsed_instruction.x),
+                0x29 => self.set_index_register_to_font_sprite(parsed_instruction.x),
+                0x33 => self.set_index_register_to_bcd(parsed_instruction.x),
+                0x55 => self.store_registers_in_memory(parsed_instruction.x),
+                0x65 => self.load_registers_from_memory(parsed_instruction.x),
                 _ => panic!(
                     "Unrecognized second byte: {:X} for opcode: {:X}",
                     parsed_instruction.nn, parsed_instruction.opcode
@@ -499,5 +503,37 @@ impl Chip8 {
     // 0xFX1E
     fn add_register_to_index_register(&mut self, register: u8) {
         self.index_register += self.registers[register as usize] as u16;
+    }
+
+    // 0xFX29
+    fn set_index_register_to_font_sprite(&mut self, register: u8) {
+        let font_sprite = self.registers[register as usize] * 5;
+        self.index_register = font_sprite as u16 + constants::FONT_START as u16;
+    }
+
+    // 0xFX33
+    fn set_index_register_to_bcd(&mut self, register: u8) {
+        let value = self.registers[register as usize];
+        let hundreds = value / 100;
+        let tens = (value / 10) % 10;
+        let ones = value % 10;
+
+        self.ram[self.index_register as usize] = hundreds;
+        self.ram[self.index_register as usize + 1] = tens;
+        self.ram[self.index_register as usize + 2] = ones;
+    }
+
+    // 0xFX55
+    fn store_registers_in_memory(&mut self, x: u8) {
+        for i in 0..=x {
+            self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
+        }
+    }
+
+    // 0xFX65
+    fn load_registers_from_memory(&mut self, x: u8) {
+        for i in 0..=x {
+            self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
+        }
     }
 }
