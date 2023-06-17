@@ -1,3 +1,4 @@
+use rand;
 use sdl2::{self, event::Event, keyboard::Keycode};
 use std::time;
 
@@ -215,6 +216,8 @@ impl Chip8 {
             },
             0x90 => self.skip_if_not_equal_to_register(parsed_instruction.x, parsed_instruction.y),
             0xA0 => self.set_index_register_to_value(parsed_instruction.nnn),
+            0xB0 => self.jump_to_address_with_offset(parsed_instruction.nnn),
+            0xC0 => self.set_register_to_random(parsed_instruction.x, parsed_instruction.nn),
             0xD0 => self.display(
                 parsed_instruction.x,
                 parsed_instruction.y,
@@ -355,6 +358,18 @@ impl Chip8 {
     // 0xANNN
     fn set_index_register_to_value(&mut self, value: u16) {
         self.index_register = value;
+    }
+
+    // 0xBNNN
+    fn jump_to_address_with_offset(&mut self, address: u16) {
+        let offset = self.registers[0] as u16;
+        self.program_counter = (address + offset) as usize;
+    }
+
+    // 0xCXNN
+    fn set_register_to_random(&mut self, register: u8, value: u8) {
+        let random_value = rand::random::<u8>();
+        self.registers[register as usize] = random_value & value;
     }
 
     // 0xDXYN
