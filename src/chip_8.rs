@@ -75,6 +75,8 @@ pub struct Chip8 {
     last_instruction_time: u128,
     last_decrement_timer_time: u128,
     update_display: bool,
+
+    increment_index_register: bool,
 }
 
 impl Chip8 {
@@ -118,6 +120,7 @@ impl Chip8 {
             last_decrement_timer_time,
             instruction_time,
             update_display: false,
+            increment_index_register: true,
         }
     }
 
@@ -135,8 +138,8 @@ impl Chip8 {
                 if self.sound_timer > 0 {
                     self.sound_timer -= 1;
                 }
+                self.last_decrement_timer_time = current_epoch_ns;
             }
-            self.last_decrement_timer_time = current_epoch_ns;
 
             let pressed_keys: HashSet<u8> = event_pump
                 .keyboard_state()
@@ -350,16 +353,19 @@ impl Chip8 {
     // 0x8XY1
     fn or_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] |= self.registers[y_register as usize];
+        self.registers[0x0F] = 0;
     }
 
     // 0x8XY2
     fn and_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] &= self.registers[y_register as usize];
+        self.registers[0x0F] = 0;
     }
 
     // 0x8XY3
     fn xor_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] ^= self.registers[y_register as usize];
+        self.registers[0x0F] = 0;
     }
 
     // 0x8XY4
@@ -381,8 +387,9 @@ impl Chip8 {
     // 0x8XY6
     fn set_register_to_right_shifted_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] = self.registers[y_register as usize];
-        self.registers[0x0F] = self.registers[x_register as usize] & 0x01;
+        let shift = self.registers[x_register as usize] & 0x01;
         self.registers[x_register as usize] >>= 1;
+        self.registers[0x0F] = shift;
     }
 
     // 0x8XY7
@@ -396,8 +403,9 @@ impl Chip8 {
     // 0x8XYE
     fn set_register_to_left_shifted_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] = self.registers[y_register as usize];
-        self.registers[0x0F] = (self.registers[x_register as usize] & 0x80) >> 7;
+        let shift = (self.registers[x_register as usize] & 0x80) >> 7;
         self.registers[x_register as usize] <<= 1;
+        self.registers[0x0F] = shift;
     }
 
     // 9XY0
@@ -526,14 +534,24 @@ impl Chip8 {
     // 0xFX55
     fn store_registers_in_memory(&mut self, x: u8) {
         for i in 0..=x {
-            self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
+            if !self.increment_index_register {
+                self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
+            } else {
+                self.ram[self.index_register as usize] = self.registers[i as usize];
+                self.index_register += 1;
+            }
         }
     }
 
     // 0xFX65
     fn load_registers_from_memory(&mut self, x: u8) {
         for i in 0..=x {
-            self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
+            if !self.increment_index_register {
+                self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
+            } else {
+                self.registers[i as usize] = self.ram[self.index_register as usize];
+                self.index_register += 1;
+            }
         }
     }
 }
