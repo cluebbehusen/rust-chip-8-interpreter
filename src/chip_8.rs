@@ -35,6 +35,51 @@ fn map_scancode_to_value(scancode: Scancode) -> Option<u8> {
     }
 }
 
+pub enum Platform {
+    Chip8,
+    SuperChip,
+}
+
+pub struct Quirks {
+    reset_flag: bool,
+    increment_index_register: bool,
+    shift_in_place: bool,
+    jump_plus_x_register: bool,
+}
+
+impl Quirks {
+    pub fn new(platform: Platform) -> Self {
+        match platform {
+            Platform::Chip8 => Quirks {
+                reset_flag: true,
+                increment_index_register: true,
+                shift_in_place: false,
+                jump_plus_x_register: false,
+            },
+            Platform::SuperChip => Quirks {
+                reset_flag: false,
+                increment_index_register: false,
+                shift_in_place: true,
+                jump_plus_x_register: true,
+            },
+        }
+    }
+
+    pub fn build(
+        reset_flag: bool,
+        increment_index_register: bool,
+        shift_in_place: bool,
+        jump_plus_x_register: bool,
+    ) -> Self {
+        Quirks {
+            reset_flag,
+            increment_index_register,
+            shift_in_place,
+            jump_plus_x_register,
+        }
+    }
+}
+
 struct ParsedInstruction {
     opcode: u8,
     x: u8,
@@ -72,11 +117,11 @@ pub struct Chip8 {
     sdl_context: sdl2::Sdl,
     debug: bool,
     instruction_time: u128,
+    quirks: Quirks,
+
     last_instruction_time: u128,
     last_decrement_timer_time: u128,
     update_display: bool,
-
-    increment_index_register: bool,
 }
 
 impl Chip8 {
@@ -87,6 +132,7 @@ impl Chip8 {
         background_color: (u8, u8, u8),
         foreground_color: (u8, u8, u8),
         debug: bool,
+        quirks: Quirks,
     ) -> Self {
         let bytes = std::fs::read(rom_file)
             .unwrap_or_else(|error| panic!("Failed to read file: {:?}", error));
@@ -116,11 +162,12 @@ impl Chip8 {
             sdl_context,
             display,
             debug,
+            instruction_time,
+            quirks,
+
             last_instruction_time,
             last_decrement_timer_time,
-            instruction_time,
             update_display: false,
-            increment_index_register: true,
         }
     }
 
@@ -248,7 +295,7 @@ impl Chip8 {
             },
             0x90 => self.skip_if_not_equal_to_register(parsed_instruction.x, parsed_instruction.y),
             0xA0 => self.set_index_register_to_value(parsed_instruction.nnn),
-            0xB0 => self.jump_to_address_with_offset(parsed_instruction.nnn),
+            0xB0 => self.jump_to_address_with_offset(parsed_instruction.x, parsed_instruction.nnn),
             0xC0 => self.set_register_to_random(parsed_instruction.x, parsed_instruction.nn),
             0xD0 => self.display(
                 parsed_instruction.x,
@@ -353,19 +400,25 @@ impl Chip8 {
     // 0x8XY1
     fn or_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] |= self.registers[y_register as usize];
-        self.registers[0x0F] = 0;
+        if self.quirks.reset_flag {
+            self.registers[0x0F] = 0;
+        }
     }
 
     // 0x8XY2
     fn and_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] &= self.registers[y_register as usize];
-        self.registers[0x0F] = 0;
+        if self.quirks.reset_flag {
+            self.registers[0x0F] = 0;
+        }
     }
 
     // 0x8XY3
     fn xor_register_with_register(&mut self, x_register: u8, y_register: u8) {
         self.registers[x_register as usize] ^= self.registers[y_register as usize];
-        self.registers[0x0F] = 0;
+        if self.quirks.reset_flag {
+            self.registers[0x0F] = 0;
+        }
     }
 
     // 0x8XY4
@@ -386,7 +439,9 @@ impl Chip8 {
 
     // 0x8XY6
     fn set_register_to_right_shifted_register(&mut self, x_register: u8, y_register: u8) {
-        self.registers[x_register as usize] = self.registers[y_register as usize];
+        if !self.quirks.shift_in_place {
+            self.registers[x_register as usize] = self.registers[y_register as usize];
+        }
         let shift = self.registers[x_register as usize] & 0x01;
         self.registers[x_register as usize] >>= 1;
         self.registers[0x0F] = shift;
@@ -402,7 +457,9 @@ impl Chip8 {
 
     // 0x8XYE
     fn set_register_to_left_shifted_register(&mut self, x_register: u8, y_register: u8) {
-        self.registers[x_register as usize] = self.registers[y_register as usize];
+        if !self.quirks.shift_in_place {
+            self.registers[x_register as usize] = self.registers[y_register as usize];
+        }
         let shift = (self.registers[x_register as usize] & 0x80) >> 7;
         self.registers[x_register as usize] <<= 1;
         self.registers[0x0F] = shift;
@@ -421,8 +478,11 @@ impl Chip8 {
     }
 
     // 0xBNNN
-    fn jump_to_address_with_offset(&mut self, address: u16) {
-        let offset = self.registers[0] as u16;
+    fn jump_to_address_with_offset(&mut self, x_register: u8, address: u16) {
+        let offset = match self.quirks.jump_plus_x_register {
+            true => self.registers[x_register as usize],
+            false => self.registers[0],
+        } as u16;
         self.program_counter = (address + offset) as usize;
     }
 
@@ -534,11 +594,11 @@ impl Chip8 {
     // 0xFX55
     fn store_registers_in_memory(&mut self, x: u8) {
         for i in 0..=x {
-            if !self.increment_index_register {
-                self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
-            } else {
+            if self.quirks.increment_index_register {
                 self.ram[self.index_register as usize] = self.registers[i as usize];
                 self.index_register += 1;
+            } else {
+                self.ram[self.index_register as usize + i as usize] = self.registers[i as usize];
             }
         }
     }
@@ -546,11 +606,11 @@ impl Chip8 {
     // 0xFX65
     fn load_registers_from_memory(&mut self, x: u8) {
         for i in 0..=x {
-            if !self.increment_index_register {
-                self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
-            } else {
+            if self.quirks.increment_index_register {
                 self.registers[i as usize] = self.ram[self.index_register as usize];
                 self.index_register += 1;
+            } else {
+                self.registers[i as usize] = self.ram[self.index_register as usize + i as usize];
             }
         }
     }
