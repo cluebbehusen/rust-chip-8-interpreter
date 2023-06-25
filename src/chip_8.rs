@@ -1,3 +1,4 @@
+use clap::ValueEnum;
 use rand;
 use sdl2::{self, event::Event, keyboard::Keycode, keyboard::Scancode};
 use std::collections::HashSet;
@@ -35,6 +36,7 @@ fn map_scancode_to_value(scancode: Scancode) -> Option<u8> {
     }
 }
 
+#[derive(Debug, Clone, ValueEnum)]
 pub enum Platform {
     Chip8,
     SuperChip,
@@ -62,20 +64,6 @@ impl Quirks {
                 shift_in_place: true,
                 jump_plus_x_register: true,
             },
-        }
-    }
-
-    pub fn build(
-        reset_flag: bool,
-        increment_index_register: bool,
-        shift_in_place: bool,
-        jump_plus_x_register: bool,
-    ) -> Self {
-        Quirks {
-            reset_flag,
-            increment_index_register,
-            shift_in_place,
-            jump_plus_x_register,
         }
     }
 }
