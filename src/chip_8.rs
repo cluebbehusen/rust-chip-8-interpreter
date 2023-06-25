@@ -4,6 +4,7 @@ use sdl2::{self, event::Event, keyboard::Keycode, keyboard::Scancode};
 use std::collections::HashSet;
 use std::time;
 
+use crate::beep::Beep;
 use crate::constants;
 use crate::display::Display;
 
@@ -102,6 +103,7 @@ pub struct Chip8 {
     display_buffer: [bool; constants::DISPLAY_LEN],
 
     display: Display,
+    beep: Beep,
     sdl_context: sdl2::Sdl,
     debug: bool,
     instruction_time: u128,
@@ -135,6 +137,7 @@ impl Chip8 {
         let last_decrement_timer_time = current_epoch_ns;
         let sdl_context = sdl2::init().unwrap();
         let display = Display::build(&sdl_context, scale, background_color, foreground_color);
+        let beep = Beep::build(&sdl_context);
 
         Chip8 {
             ram,
@@ -148,6 +151,7 @@ impl Chip8 {
             display_buffer: [false; constants::DISPLAY_LEN],
 
             sdl_context,
+            beep,
             display,
             debug,
             instruction_time,
@@ -171,7 +175,10 @@ impl Chip8 {
                     self.delay_timer -= 1;
                 }
                 if self.sound_timer > 0 {
+                    self.beep.play();
                     self.sound_timer -= 1;
+                } else {
+                    self.beep.stop();
                 }
                 self.last_decrement_timer_time = current_epoch_ns;
             }
