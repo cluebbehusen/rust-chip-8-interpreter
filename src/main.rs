@@ -1,3 +1,4 @@
+mod beep;
 mod chip_8;
 mod constants;
 mod display;
@@ -6,7 +7,7 @@ use clap::Parser;
 
 use chip_8::{Chip8, Platform, Quirks};
 
-/// A Chip-8 interpreter written in Rust
+/// A CHIP-8 interpreter written in Rust
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
